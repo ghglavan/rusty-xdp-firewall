@@ -1,5 +1,5 @@
 pub(crate) use libbpf_sys::*;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 use crate::errors::*;
 use crate::program::*;
@@ -14,7 +14,7 @@ impl BpfObject {
     pub fn get_name(&self) -> Result<String> {
         unsafe {
             let s = bpf_object__name(self.bpf_obj);
-            Ok(CString::from_raw(s as *mut i8).into_string()?)
+            Ok(CStr::from_ptr(s as *mut i8).to_str()?.to_owned())
         }
     }
 
@@ -79,83 +79,62 @@ impl<'a> Iterator for BpfPrograms<'a> {
 }
 
 #[derive(Debug)]
-pub struct BpfObjectLoader<'a> {
-    file_name: &'a str,
-    prog_type: bpf_prog_type,
-    expected_attach_type: bpf_attach_type,
-    log_level: i32,
-    prog_flags: i32,
-    ifindex: i32,
+pub struct BpfObjectLoader {
+    attr: bpf_prog_load_attr,
 }
 
-impl<'a> BpfObjectLoader<'a> {
+impl BpfObjectLoader {
     pub fn new() -> Self {
         BpfObjectLoader {
-            file_name: "",
-            prog_type: 0,
-            expected_attach_type: 0,
-            prog_flags: 0,
-            log_level: 0,
-            ifindex: 0,
+            attr: bpf_prog_load_attr::default(),
         }
     }
 
     pub fn with_prog_type(mut self, prog_type: bpf_prog_type) -> Self {
-        self.prog_type = prog_type;
+        self.attr.prog_type = prog_type;
         self
     }
 
-    pub fn with_file_name(mut self, file_name: &'a str) -> Self {
-        self.file_name = file_name;
+    pub fn with_file_name(mut self, file_name: &str) -> Self {
+        let s = CString::new(file_name.to_owned()).unwrap();
+        self.attr.file = s.into_raw();
         self
     }
 
     pub fn with_expected_attach_type(mut self, ex_att_type: bpf_attach_type) -> Self {
-        self.expected_attach_type = ex_att_type;
+        self.attr.expected_attach_type = ex_att_type;
         self
     }
 
     pub fn with_log_level(mut self, log_level: i32) -> Self {
-        self.log_level = log_level;
+        self.attr.log_level = log_level;
         self
     }
 
     pub fn with_prog_flags(mut self, prog_flags: i32) -> Self {
-        self.prog_flags = prog_flags;
+        self.attr.prog_flags = prog_flags;
         self
     }
 
     pub fn with_ifindex(mut self, ifindex: i32) -> Self {
-        self.ifindex = ifindex;
+        self.attr.ifindex = ifindex;
         self
     }
 
     pub fn load(self) -> Result<BpfObject> {
-        let s = CString::new(self.file_name).unwrap();
-        let attr = bpf_prog_load_attr {
-            prog_type: self.prog_type,
-            file: s.as_ptr(),
-            expected_attach_type: self.expected_attach_type,
-            log_level: self.log_level,
-            prog_flags: self.prog_flags,
-            ifindex: self.ifindex,
-        };
         let obj: *mut bpf_object = std::ptr::null_mut();
         let first_prog_fd = -1;
 
         let err = unsafe {
             bpf_prog_load_xattr(
-                &attr as *const bpf_prog_load_attr,
+                &self.attr as *const bpf_prog_load_attr,
                 &obj as *const *mut bpf_object as *mut *mut bpf_object,
                 &first_prog_fd as *const i32 as *mut i32,
             )
         };
 
         if err != 0 {
-            bail!(ErrorKind::LoadXAttrFailed(
-                err,
-                String::from(self.file_name)
-            ));
+            bail!(ErrorKind::LoadXAttrFailed(err));
         }
 
         Ok(BpfObject {

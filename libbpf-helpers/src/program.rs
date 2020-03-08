@@ -2,7 +2,7 @@ use crate::errors::*;
 use crate::xdp_attacher::*;
 use libbpf_sys::*;
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 pub type ProgFD = i32;
 
@@ -27,20 +27,11 @@ impl BpfProgram {
     }
 
     pub fn get_title_not_owned(&self) -> Result<&str> {
-        let name = unsafe { CStr::from_ptr(bpf_program__title(self.bpf_prog, false)) };
-        match name.to_str() {
-            Err(e) => bail!(e),
-            Ok(s) => Ok(s),
-        }
+        Ok(unsafe { CStr::from_ptr(bpf_program__title(self.bpf_prog, false)).to_str()? })
     }
 
     pub fn get_title_owned(&self) -> Result<String> {
-        let name =
-            unsafe { CString::from_raw(bpf_program__title(self.bpf_prog, false) as *mut i8) };
-        match name.into_string() {
-            Err(e) => bail!(e),
-            Ok(s) => Ok(s),
-        }
+        Ok(self.get_title_not_owned()?.to_owned())
     }
 
     pub fn get_attacher(&self) -> Result<XdpAttacher> {

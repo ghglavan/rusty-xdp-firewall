@@ -1,3 +1,5 @@
+use nix::errno;
+
 fn errno_to_str<'a>(err: i32) -> &'a str {
     unsafe {
         std::ffi::CStr::from_ptr(libc::strerror(err))
@@ -11,13 +13,14 @@ error_chain! {
         Io(::std::io::Error);
         FFIString(::std::ffi::IntoStringError);
         FFINul(::std::ffi::NulError);
+        FFIBytesWithNul(::std::ffi::FromBytesWithNulError);
         UTF(::std::str::Utf8Error);
     }
 
     errors {
-        LoadXAttrFailed(en: i32, file: String) {
+        LoadXAttrFailed(en: i32) {
             description("bpf_prog_load_xattr failed")
-            display("bpf_prog_load_xattr for {} failed with: '{}'", file, self::errno_to_str(*en))
+            display("bpf_prog_load_xattr failed with: '{}'", self::errno_to_str(*en))
         }
 
         InvalidInterface(en: i32, ifname: String) {
@@ -53,6 +56,31 @@ error_chain! {
         ProgNotXdp {
             description("bpf program is not xdp")
             display("this bpf program is not")
+        }
+
+        MapCreateFailed {
+            description("could not create map")
+            display("error creating map with xattr: {}", self::errno_to_str(errno::errno()))
+        }
+
+        MapOperationFailed(operation: String) {
+            description("Error operating on map")
+            display("error doing {} on map: {}", operation, self::errno_to_str(errno::errno()))
+        }
+
+        MapToFdFailed {
+            description("error converting bpf_map to fd")
+            display("could not convert bpf_map to fd: {}", self::errno_to_str(errno::errno()))
+        }
+
+        MapReuseFdFailed {
+            description("error reusing map fd")
+            display("could not reuse map fds {}", self::errno_to_str(errno::errno()))
+        }
+
+        MapResizeFailed {
+            description("error resizing map")
+            display("could not resize map: {}", self::errno_to_str(errno::errno()))
         }
     }
 }
