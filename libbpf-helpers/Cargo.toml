@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 libbpf-sys = "0.0.6-7"
+#libbpf-sys = {path = "../../libbpf-sys"}
 libc = "0.2.67"
 nix = "0.17.0"
 error-chain = "0.12.2"

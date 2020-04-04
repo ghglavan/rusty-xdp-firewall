@@ -239,7 +239,7 @@ impl<K, V> BpfMapCreator<K, V> {
     fn_with_u32_arg!(with_btf_key_type_id, btf_key_type_id);
     fn_with_u32_arg!(with_btf_value_type_id, btf_value_type_id);
     fn_with_u32_arg!(with_map_ifindex, map_ifindex);
-    fn_with_u32_arg!(with_inner_map_fd, inner_map_fd);
+    //fn_with_u32_arg!(with_inner_map_fd, inner_map_fd);
 
     pub fn with_type(&mut self, map_type: bpf_map_type) -> &mut Self {
         self.attrs.map_type = map_type;

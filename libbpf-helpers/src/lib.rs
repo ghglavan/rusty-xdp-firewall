@@ -135,7 +135,6 @@ mod tests {
         assert!(l.is_err());
 
         //lookup_and_delete_elem is not worky with hash maps
-        //BPF_F_LOCK is not worky with hash maps
 
         let l = m.delete_elem(&k);
         assert!(l.is_ok());
@@ -174,5 +173,12 @@ mod tests {
         let map = object.get_map_by_name::<u32, u32>("xdp_test_map");
         assert!(map.is_ok());
         let map = map.unwrap();
+        let m = map.get_fd();
+        assert!(m.is_ok());
+        let m = m.unwrap();
+
+        let k = 0_u32;
+        let l = m.lookup_elem_flags(&k, crate::raw_libbpf::BPF_F_LOCK);
+        assert!(l.is_ok());
     }
 }
