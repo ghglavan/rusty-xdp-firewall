@@ -10,7 +10,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Setup Dependencies
-      run: sudo apt install --fix-missing clang llvm libelf-dev gcc-multilib
+      run: sudo apt update && sudo apt install clang llvm libelf-dev gcc-multilib
     - name: Build
       run: cargo build --verbose
     - name: Run tests
