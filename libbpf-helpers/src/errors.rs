@@ -58,6 +58,11 @@ error_chain! {
             display("this bpf program is not")
         }
 
+        GetMapByNameFailed {
+            description("failed to load bpf map")
+            display("error loading bpf map")
+        }
+
         MapCreateFailed {
             description("could not create map")
             display("error creating map with xattr: {}", self::errno_to_str(errno::errno()))

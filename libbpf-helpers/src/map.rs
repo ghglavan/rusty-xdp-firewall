@@ -6,9 +6,9 @@ use std::iter::Iterator;
 
 #[derive(Debug)]
 pub struct BpfMap<K, V> {
-    bpf_map: *mut bpf_map,
-    _k: std::marker::PhantomData<K>,
-    _v: std::marker::PhantomData<V>,
+    pub(crate) bpf_map: *mut bpf_map,
+    pub(crate) _k: std::marker::PhantomData<K>,
+    pub(crate) _v: std::marker::PhantomData<V>,
 }
 
 impl<K, V> BpfMap<K, V> {
@@ -67,7 +67,7 @@ pub struct BpfMapFd<K, V> {
 
 impl<K, V> BpfMapFd<K, V> {
     //flags: BPF_ANY, BPF_EXIST, BPF_NO_EXIST, BFP_F_LOCK
-    pub fn update_elem(&self, key: &K, value: &V, flags: u32) -> Result<()> {
+    pub fn update_elem(&mut self, key: &K, value: &V, flags: u32) -> Result<()> {
         let ret = unsafe {
             bpf_map_update_elem(
                 self.inner_fd,
@@ -109,7 +109,7 @@ impl<K, V> BpfMapFd<K, V> {
         self.lookup_elem_flags(key, BPF_ANY)
     }
 
-    pub fn lookup_and_delete_elem(&self, key: &K) -> Result<V> {
+    pub fn lookup_and_delete_elem(&mut self, key: &K) -> Result<V> {
         let v: V = unsafe { std::mem::zeroed() };
         let ret = unsafe {
             bpf_map_lookup_and_delete_elem(
@@ -128,7 +128,7 @@ impl<K, V> BpfMapFd<K, V> {
         Ok(v)
     }
 
-    pub fn delete_elem(&self, key: &K) -> Result<()> {
+    pub fn delete_elem(&mut self, key: &K) -> Result<()> {
         let ret = unsafe {
             bpf_map_delete_elem(self.inner_fd, key as *const K as *const core::ffi::c_void)
         };

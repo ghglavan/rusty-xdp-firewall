@@ -2,6 +2,7 @@ pub(crate) use libbpf_sys::*;
 use std::ffi::{CStr, CString};
 
 use crate::errors::*;
+use crate::map::*;
 use crate::program::*;
 
 #[derive(Debug)]
@@ -34,6 +35,22 @@ impl BpfObject {
         }
 
         Ok(BpfProgram { bpf_prog: prog })
+    }
+
+    pub fn get_map_by_name<K, V>(&self, name: &str) -> Result<BpfMap<K, V>> {
+        let map: *mut bpf_map = unsafe {
+            bpf_object__find_map_by_name(self.bpf_obj, CString::new(name).unwrap().as_ptr())
+        };
+
+        if map == std::ptr::null_mut() {
+            bail!(ErrorKind::GetMapByNameFailed)
+        }
+
+        Ok(BpfMap {
+            bpf_map: map,
+            _k: std::marker::PhantomData,
+            _v: std::marker::PhantomData,
+        })
     }
 
     pub fn programs(&self) -> BpfPrograms {

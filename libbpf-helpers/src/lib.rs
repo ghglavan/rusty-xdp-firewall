@@ -105,7 +105,7 @@ mod tests {
             .create();
 
         assert!(m.is_ok());
-        let m = m.unwrap();
+        let mut m = m.unwrap();
         let mut k = 10_u32;
         let mut v = 3_u32;
         assert!(m.update_elem(&k, &v, crate::raw_libbpf::BPF_ANY).is_ok());
@@ -156,17 +156,23 @@ mod tests {
 
         assert!(m.is_ok());
 
-        let m = m.unwrap();
-        let mut k = 10_u32;
-        let mut v = 3_u32;
+        let mut m = m.unwrap();
+        let k = 10_u32;
+        let v = 3_u32;
 
         assert!(m.update_elem(&k, &v, crate::raw_libbpf::BPF_ANY).is_ok());
+    }
 
-        let l = m.update_elem(&k, &k, crate::raw_libbpf::BPF_F_LOCK);
-
-        if l.is_err() {
-            println!("error: {}", l.err().unwrap());
-            assert!(false);
-        }
+    #[test]
+    fn test_map_bpf_f_lock() {
+        let object = crate::object::BpfObjectLoader::new()
+            .with_file_name("../objs/hello_prog.o")
+            .with_prog_type(crate::map::BPF_PROG_TYPE_XDP)
+            .load();
+        assert!(object.is_ok());
+        let object = object.unwrap();
+        let map = object.get_map_by_name::<u32, u32>("xdp_test_map");
+        assert!(map.is_ok());
+        let map = map.unwrap();
     }
 }
