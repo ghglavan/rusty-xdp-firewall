@@ -1,7 +1,6 @@
 pub(crate) use libbpf_sys::*;
 use std::ffi::{CStr, CString};
 
-use crate::errors::*;
 use crate::map::*;
 use crate::program::*;
 
@@ -12,10 +11,13 @@ pub struct BpfObject {
 }
 
 impl BpfObject {
-    pub fn get_name(&self) -> Result<String> {
+    pub fn get_name(&self) -> Result<String, String> {
         unsafe {
             let s = bpf_object__name(self.bpf_obj);
-            Ok(CStr::from_ptr(s as *mut i8).to_str()?.to_owned())
+            Ok(CStr::from_ptr(s as *mut i8)
+                .to_str()
+                .map_err(|e| format!("error getting object name: {}", e))?
+                .to_owned())
         }
     }
 
@@ -25,25 +27,25 @@ impl BpfObject {
             .collect()
     }
 
-    pub fn get_prog_by_name(&self, name: &str) -> Result<BpfProgram> {
+    pub fn get_prog_by_name(&self, name: &str) -> Result<BpfProgram, String> {
         let prog = unsafe {
             bpf_object__find_program_by_title(self.bpf_obj, CString::new(name).unwrap().as_ptr())
         };
 
         if prog == std::ptr::null_mut() {
-            bail!(ErrorKind::InvalidProgName(name.to_string()));
+            bail!(format!("error getting program by name. name: {}", name));
         }
 
         Ok(BpfProgram { bpf_prog: prog })
     }
 
-    pub fn get_map_by_name<K, V>(&self, name: &str) -> Result<BpfMap<K, V>> {
+    pub fn get_map_by_name<K, V>(&self, name: &str) -> Result<BpfMap<K, V>, String> {
         let map: *mut bpf_map = unsafe {
             bpf_object__find_map_by_name(self.bpf_obj, CString::new(name).unwrap().as_ptr())
         };
 
         if map == std::ptr::null_mut() {
-            bail!(ErrorKind::GetMapByNameFailed)
+            bail!(format!("error getting map by name. name: {}", name))
         }
 
         Ok(BpfMap {
@@ -51,6 +53,28 @@ impl BpfObject {
             _k: std::marker::PhantomData,
             _v: std::marker::PhantomData,
         })
+    }
+
+    pub fn pin_maps(&self, path: &str) -> Result<(), String> {
+        let ret =
+            unsafe { bpf_object__pin_maps(self.bpf_obj, CString::new(path).unwrap().as_ptr()) };
+
+        if ret != 0 {
+            bail!(format!("Error pinning maps: {}", ret));
+        }
+
+        Ok(())
+    }
+
+    pub fn unpin_maps(&self, path: &str) -> Result<(), String> {
+        let ret =
+            unsafe { bpf_object__unpin_maps(self.bpf_obj, CString::new(path).unwrap().as_ptr()) };
+
+        if ret != 0 {
+            bail!(format!("Error unpinning maps: {}", ret));
+        }
+
+        Ok(())
     }
 
     pub fn programs(&self) -> BpfPrograms {
@@ -138,7 +162,7 @@ impl BpfObjectLoader {
         self
     }
 
-    pub fn load(self) -> Result<BpfObject> {
+    pub fn load(self) -> Result<BpfObject, String> {
         let obj: *mut bpf_object = std::ptr::null_mut();
         let first_prog_fd = -1;
 
@@ -151,7 +175,7 @@ impl BpfObjectLoader {
         };
 
         if err != 0 {
-            bail!(ErrorKind::LoadXAttrFailed(err));
+            bail!(format!("error loading xattr: {}", err));
         }
 
         Ok(BpfObject {

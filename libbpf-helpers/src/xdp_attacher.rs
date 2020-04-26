@@ -1,6 +1,4 @@
-use crate::errors::*;
 use crate::program::*;
-
 use libbpf_sys::*;
 
 use std::ffi::CString;
@@ -16,15 +14,14 @@ pub struct XdpAttacher<'a> {
 }
 
 impl<'a> XdpAttacher<'a> {
-    pub fn with_if(&mut self, ifname: &str) -> Result<&mut Self> {
-        let c_ifname = CString::new(ifname)?;
+    pub fn with_if(&mut self, ifname: &str) -> Result<&mut Self, String> {
+        let c_ifname = CString::new(ifname)
+            .map_err(|e| format!("error converting ifname {} to cstring: {}", ifname, e))?;
+
         let ifindex = unsafe { if_nametoindex(c_ifname.as_ptr() as *const i8) };
 
         if ifindex == 0 {
-            bail!(ErrorKind::InvalidInterface(
-                errno::errno(),
-                ifname.to_string()
-            ));
+            bail!(format!("invalid interface {}: {}", ifname, errno::errno()));
         }
 
         self.ifindex = ifindex as i32;
@@ -54,7 +51,7 @@ impl<'a> XdpAttacher<'a> {
         self
     }
 
-    pub fn attach(&mut self) -> Result<&mut Self> {
+    pub fn attach(&mut self) -> Result<&mut Self, String> {
         let mut err =
             unsafe { bpf_set_link_xdp_fd(self.ifindex, self.bpf_prog.get_fd()?, self.flags) };
 
@@ -74,21 +71,23 @@ impl<'a> XdpAttacher<'a> {
             }
         }
         if err != 0 {
-            bail!(ErrorKind::XdpAttachFailed(
-                -err,
-                self.bpf_prog.get_title_owned().unwrap()
+            bail!(format!(
+                "error attaching program {}: {}",
+                self.bpf_prog.get_title_owned().unwrap(),
+                err
             ));
         }
 
         Ok(self)
     }
 
-    pub fn detach(&mut self) -> Result<&mut Self> {
+    pub fn detach(&mut self) -> Result<&mut Self, String> {
         let err = unsafe { bpf_set_link_xdp_fd(self.ifindex, -1, self.flags) };
         if err != 0 {
-            bail!(ErrorKind::XdpDetachFailed(
-                -err,
-                self.bpf_prog.get_title_owned().unwrap()
+            bail!(format!(
+                "error detaching program {}: {}",
+                self.bpf_prog.get_title_owned().unwrap(),
+                err
             ));
         }
         Ok(self)

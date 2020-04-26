@@ -1,4 +1,3 @@
-use crate::errors::*;
 use crate::xdp_attacher::*;
 use libbpf_sys::*;
 
@@ -12,11 +11,11 @@ pub struct BpfProgram {
 }
 
 impl BpfProgram {
-    pub fn get_fd(&self) -> Result<ProgFD> {
+    pub fn get_fd(&self) -> Result<ProgFD, String> {
         let fd = unsafe { bpf_program__fd(self.bpf_prog) };
 
         if fd <= 0 {
-            bail!(ErrorKind::InvalidProgFD);
+            bail!(format!("error getting program fd: {}", fd));
         }
 
         Ok(fd)
@@ -26,17 +25,21 @@ impl BpfProgram {
         unsafe { bpf_program__set_ifindex(self.bpf_prog, ifindex as u32) }
     }
 
-    pub fn get_title_not_owned(&self) -> Result<&str> {
-        Ok(unsafe { CStr::from_ptr(bpf_program__title(self.bpf_prog, false)).to_str()? })
+    pub fn get_title_not_owned(&self) -> Result<&str, String> {
+        Ok(unsafe {
+            CStr::from_ptr(bpf_program__title(self.bpf_prog, false))
+                .to_str()
+                .map_err(|e| format!("error getting program title: {}", e))?
+        })
     }
 
-    pub fn get_title_owned(&self) -> Result<String> {
+    pub fn get_title_owned(&self) -> Result<String, String> {
         Ok(self.get_title_not_owned()?.to_owned())
     }
 
-    pub fn get_attacher(&self) -> Result<XdpAttacher> {
+    pub fn get_attacher(&self) -> Result<XdpAttacher, String> {
         if !unsafe { bpf_program__is_xdp(self.bpf_prog) } {
-            bail!(ErrorKind::ProgNotXdp);
+            bail!("error getting the attacher: program is not xdp");
         }
 
         Ok(XdpAttacher {

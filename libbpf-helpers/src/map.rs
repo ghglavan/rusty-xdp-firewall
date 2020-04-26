@@ -1,7 +1,6 @@
 pub(crate) use libbpf_sys::*;
 use std::ffi::{CStr, CString};
 
-use crate::errors::*;
 use std::iter::Iterator;
 
 #[derive(Debug)]
@@ -12,11 +11,11 @@ pub struct BpfMap<K, V> {
 }
 
 impl<K, V> BpfMap<K, V> {
-    pub fn get_fd(&self) -> Result<BpfMapFd<K, V>> {
+    pub fn get_fd(&self) -> Result<BpfMapFd<K, V>, String> {
         let fd = unsafe { bpf_map__fd(self.bpf_map) };
 
         if fd < 0 {
-            bail!(ErrorKind::MapToFdFailed);
+            bail!(format!("error getting fd: {}", fd));
         }
 
         Ok(BpfMapFd {
@@ -26,8 +25,32 @@ impl<K, V> BpfMap<K, V> {
         })
     }
 
-    pub fn get_name(&self) -> Result<&str> {
-        Ok(unsafe { CStr::from_ptr(bpf_map__name(self.bpf_map)).to_str()? })
+    pub fn get_name(&self) -> Result<&str, String> {
+        Ok(unsafe {
+            CStr::from_ptr(bpf_map__name(self.bpf_map))
+                .to_str()
+                .map_err(|e| format!("error getting map name: {}", e))?
+        })
+    }
+
+    pub fn pin(&self, path: &str) -> Result<(), String> {
+        let ret = unsafe { bpf_map__pin(self.bpf_map, CString::new(path).unwrap().as_ptr()) };
+
+        if ret != 0 {
+            bail!(format!("Error pinning map: {}", ret));
+        }
+
+        Ok(())
+    }
+
+    pub fn unpin(&self, path: &str) -> Result<(), String> {
+        let ret = unsafe { bpf_map__unpin(self.bpf_map, CString::new(path).unwrap().as_ptr()) };
+
+        if ret != 0 {
+            bail!(format!("Error unpinning map: {}", ret));
+        }
+
+        Ok(())
     }
 
     pub fn get_btf_key_type_id(&self) -> u32 {
@@ -38,21 +61,21 @@ impl<K, V> BpfMap<K, V> {
         unsafe { bpf_map__btf_value_type_id(self.bpf_map) }
     }
 
-    pub fn reuse_fd(&self, fd: i32) -> Result<()> {
-        let ret = unsafe { bpf_map__reuse_fd(self.bpf_map, fd) };
+    pub fn reuse_fd(&self, map_fd: BpfMapFd<K, V>) -> Result<(), String> {
+        let ret = unsafe { bpf_map__reuse_fd(self.bpf_map, map_fd.inner_fd) };
 
         if ret != 0 {
-            bail!(ErrorKind::MapReuseFdFailed)
+            bail!(format!("error reusing map : {}", ret))
         }
 
         Ok(())
     }
 
-    pub fn resize(&self, max_entries: u32) -> Result<()> {
+    pub fn resize(&self, max_entries: u32) -> Result<(), String> {
         let ret = unsafe { bpf_map__resize(self.bpf_map, max_entries) };
 
         if ret != 0 {
-            bail!(ErrorKind::MapResizeFailed)
+            bail!(format!("error resizing map : {}", ret))
         }
 
         Ok(())
@@ -66,8 +89,22 @@ pub struct BpfMapFd<K, V> {
 }
 
 impl<K, V> BpfMapFd<K, V> {
+    pub fn from_pinned_map(path: &str) -> Result<Self, String> {
+        let fd = unsafe { bpf_obj_get(CString::new(path).unwrap().as_ptr()) };
+
+        if fd < 0 {
+            bail!(format!("error getting obj fd from {}: {}", path, fd));
+        }
+
+        Ok(BpfMapFd {
+            inner_fd: fd,
+            _k: std::marker::PhantomData,
+            _v: std::marker::PhantomData,
+        })
+    }
+
     //flags: BPF_ANY, BPF_EXIST, BPF_NO_EXIST, BFP_F_LOCK
-    pub fn update_elem(&mut self, key: &K, value: &V, flags: u32) -> Result<()> {
+    pub fn update_elem(&mut self, key: &K, value: &V, flags: u32) -> Result<(), String> {
         let ret = unsafe {
             bpf_map_update_elem(
                 self.inner_fd,
@@ -78,13 +115,13 @@ impl<K, V> BpfMapFd<K, V> {
         };
 
         if ret != 0 {
-            bail!(ErrorKind::MapOperationFailed("update".to_string()))
+            bail!(format!("error updating element"))
         }
 
         Ok(())
     }
 
-    pub fn lookup_elem_flags(&self, key: &K, flags: u32) -> Result<V> {
+    pub fn lookup_elem_flags(&self, key: &K, flags: u32) -> Result<V, String> {
         let v: V = unsafe { std::mem::zeroed() };
         let ret = unsafe {
             bpf_map_lookup_elem_flags(
@@ -96,20 +133,17 @@ impl<K, V> BpfMapFd<K, V> {
         };
 
         if ret != 0 {
-            bail!(ErrorKind::MapOperationFailed(format!(
-                "lookup with flags {}",
-                flags
-            )))
+            bail!(format!("error looking up for elem with flags {}", flags));
         }
 
         Ok(v)
     }
 
-    pub fn lookup_elem(&self, key: &K) -> Result<V> {
+    pub fn lookup_elem(&self, key: &K) -> Result<V, String> {
         self.lookup_elem_flags(key, BPF_ANY)
     }
 
-    pub fn lookup_and_delete_elem(&mut self, key: &K) -> Result<V> {
+    pub fn lookup_and_delete_elem(&mut self, key: &K) -> Result<V, String> {
         let v: V = unsafe { std::mem::zeroed() };
         let ret = unsafe {
             bpf_map_lookup_and_delete_elem(
@@ -120,29 +154,27 @@ impl<K, V> BpfMapFd<K, V> {
         };
 
         if ret != 0 {
-            bail!(ErrorKind::MapOperationFailed(
-                "lookup_and_delete".to_string()
-            ))
+            bail!("error looking up and deleting element")
         }
 
         Ok(v)
     }
 
-    pub fn delete_elem(&mut self, key: &K) -> Result<()> {
+    pub fn delete_elem(&mut self, key: &K) -> Result<(), String> {
         let ret = unsafe {
             bpf_map_delete_elem(self.inner_fd, key as *const K as *const core::ffi::c_void)
         };
 
         if ret != 0 {
-            bail!(ErrorKind::MapOperationFailed("delete".to_string()))
+            bail!("error deleting element")
         }
 
         Ok(())
     }
 
-    pub fn freeze(&self) -> Result<()> {
+    pub fn freeze(&self) -> Result<(), String> {
         if unsafe { bpf_map_freeze(self.inner_fd) < 0 } {
-            bail!(ErrorKind::MapOperationFailed("freeze".to_string()))
+            bail!("error freezing")
         }
 
         Ok(())
@@ -246,13 +278,13 @@ impl<K, V> BpfMapCreator<K, V> {
         self
     }
 
-    pub fn create(&mut self) -> Result<BpfMapFd<K, V>> {
+    pub fn create(&mut self) -> Result<BpfMapFd<K, V>, String> {
         self.attrs.key_size = std::mem::size_of::<K>() as u32;
         self.attrs.value_size = std::mem::size_of::<V>() as u32;
         let fd = unsafe { bpf_create_map_xattr(&self.attrs as *const bpf_create_map_attr) };
 
         if fd < 0 {
-            bail!(ErrorKind::MapCreateFailed)
+            bail!("error creating map")
         }
 
         Ok(BpfMapFd {

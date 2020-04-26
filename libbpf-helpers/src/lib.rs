@@ -1,6 +1,5 @@
 #[macro_use]
-pub extern crate error_chain;
-pub mod errors;
+extern crate error_chain;
 pub mod map;
 pub mod object;
 pub mod program;
@@ -70,6 +69,24 @@ mod tests {
 
         let prog_name = prog_name.unwrap();
         assert!(prog_name == "xdp");
+    }
+
+    #[test]
+    fn test_pin_map() {
+        let object = crate::object::BpfObjectLoader::new()
+            .with_file_name("../objs/hello_prog.o")
+            .with_prog_type(crate::map::BPF_PROG_TYPE_XDP)
+            .load();
+        assert!(object.is_ok());
+        let object = object.unwrap();
+        let map = object.get_map_by_name::<u32, u32>("xdp_test_map");
+        assert!(map.is_ok());
+        let map = map.unwrap();
+
+        let maps_path = "/sys/fs/bpf/xdp_test_map";
+
+        assert!(map.pin(maps_path).is_ok());
+        assert!(map.unpin(maps_path).is_ok());
     }
 
     #[test]
