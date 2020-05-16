@@ -10,6 +10,9 @@ pub struct BpfObject {
     first_prog_fd: i32,
 }
 
+unsafe impl Send for BpfObject {}
+unsafe impl Sync for BpfObject {}
+
 impl BpfObject {
     pub fn get_name(&self) -> Result<String, String> {
         unsafe {
@@ -24,6 +27,12 @@ impl BpfObject {
     pub fn get_progs_names(&self) -> Vec<String> {
         self.programs()
             .map(|prog| prog.get_title_owned().unwrap())
+            .collect()
+    }
+
+    pub fn get_maps_names(&self) -> Vec<String> {
+        self.maps()
+            .map(|m| get_name_raw(&m).unwrap().to_string())
             .collect()
     }
 
@@ -84,6 +93,33 @@ impl BpfObject {
         }
     }
 
+    pub fn maps(&self) -> BpfMaps {
+        BpfMaps {
+            bpf_obj: self,
+            bpf_map_current: None,
+        }
+    }
+
+    fn next_map(&self, bpf_map_o: Option<*const bpf_map>) -> Option<*const bpf_map> {
+        if None == bpf_map_o {
+            let map = unsafe { bpf_map__next(std::ptr::null_mut(), self.bpf_obj) };
+
+            if map == std::ptr::null_mut() {
+                return None;
+            }
+
+            return Some(map);
+        }
+
+        let next = unsafe { bpf_map__next(bpf_map_o.unwrap(), self.bpf_obj) };
+
+        if next == std::ptr::null_mut() {
+            return None;
+        }
+
+        return Some(next);
+    }
+
     fn next_prog(&self, bpf_prog_o: Option<BpfProgram>) -> Option<BpfProgram> {
         if None == bpf_prog_o {
             let prog = unsafe { bpf_program__next(std::ptr::null_mut(), self.bpf_obj) };
@@ -102,6 +138,24 @@ impl BpfObject {
         }
 
         return Some(BpfProgram { bpf_prog: next });
+    }
+
+    fn unload(&self) {
+        unsafe { bpf_object__unload(self.bpf_obj) };
+    }
+}
+
+pub struct BpfMaps<'a> {
+    bpf_obj: &'a BpfObject,
+    bpf_map_current: Option<*const bpf_map>,
+}
+
+impl<'a> Iterator for BpfMaps<'a> {
+    type Item = *const bpf_map;
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.bpf_obj.next_map(self.bpf_map_current);
+        self.bpf_map_current = next;
+        self.bpf_map_current
     }
 }
 

@@ -10,6 +10,9 @@ pub struct BpfProgram {
     pub(crate) bpf_prog: *mut bpf_program,
 }
 
+unsafe impl Send for BpfProgram {}
+unsafe impl Sync for BpfProgram {}
+
 impl BpfProgram {
     pub fn get_fd(&self) -> Result<ProgFD, String> {
         let fd = unsafe { bpf_program__fd(self.bpf_prog) };

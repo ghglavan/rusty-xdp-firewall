@@ -10,6 +10,14 @@ pub struct BpfMap<K, V> {
     pub(crate) _v: std::marker::PhantomData<V>,
 }
 
+pub fn get_name_raw(map: &*const bpf_map) -> Result<&str, String> {
+    Ok(unsafe {
+        CStr::from_ptr(bpf_map__name(*map))
+            .to_str()
+            .map_err(|e| format!("error getting map name: {}", e))?
+    })
+}
+
 impl<K, V> BpfMap<K, V> {
     pub fn get_fd(&self) -> Result<BpfMapFd<K, V>, String> {
         let fd = unsafe { bpf_map__fd(self.bpf_map) };

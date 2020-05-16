@@ -1,8 +1,27 @@
 [package]
-name = "rust_xdp_loader"
+name = "rusty_firewall"
 version = "0.1.0"
 authors = ["gglavan <george.glavan27@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-libbpf-helpers = { path = "libbpf-helpers", version = "0.1.0" }
+libbpf-helpers = { path = "libbpf-helpers", version = "0.1.0", optional = true }
+tokio = { version = "0.2", features = ["full"]}
+clap = { version = "2.33"}
+log = "0.4.0"
+env_logger = "0.7.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+lazy_static = { version="1.4.0", optional = true }
+
+[features]
+build-daemon = ["libbpf-helpers", "lazy_static"]
+build-client = []
+
+[[bin]]
+name = "rusty-daemon"
+path = "src/daemon/daemon.rs"
+
+[[bin]]
+name = "rusty-client"
+path = "src/client/client.rs"
