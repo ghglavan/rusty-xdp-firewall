@@ -3,7 +3,7 @@ use libbpf_sys::*;
 
 use std::ffi::CStr;
 
-pub type ProgFD = i32;
+pub type ProgFDRaw = i32;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct BpfProgram {
@@ -14,7 +14,7 @@ unsafe impl Send for BpfProgram {}
 unsafe impl Sync for BpfProgram {}
 
 impl BpfProgram {
-    pub fn get_fd(&self) -> Result<ProgFD, String> {
+    pub fn get_fd(&self) -> Result<ProgFDRaw, String> {
         let fd = unsafe { bpf_program__fd(self.bpf_prog) };
 
         if fd <= 0 {

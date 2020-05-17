@@ -2,6 +2,7 @@ extern crate libbpf_helpers;
 extern crate rusty_firewall;
 use rusty_firewall::*;
 
+use libbpf_helpers::map::*;
 use libbpf_helpers::object::*;
 use libbpf_helpers::program::*;
 use libbpf_helpers::raw_libbpf::*;
@@ -23,9 +24,52 @@ use std::collections::HashMap;
 extern crate lazy_static;
 use std::sync::Mutex;
 
+enum PinType {
+    Map(MapFDRaw),
+    Prog(ProgFDRaw),
+}
+
+struct PinnedEnt {
+    pin_type: PinType,
+    pin_name: String,
+    pin_path: String,
+}
+
+impl PinnedEnt {
+    fn new_map(pin_name: String, pin_path: String, fd: MapFDRaw) -> PinnedEnt {
+        PinnedEnt {
+            pin_type: PinType::Map(fd),
+            pin_name,
+            pin_path,
+        }
+    }
+    fn new_prog(pin_name: String, pin_path: String, fd: ProgFDRaw) -> PinnedEnt {
+        PinnedEnt {
+            pin_type: PinType::Prog(fd),
+            pin_name,
+            pin_path,
+        }
+    }
+}
+
+struct HandledObject {
+    obj: BpfObject,
+    inserted_progs: Vec<BpfProgram>,
+    pinnned_entities: Vec<PinnedEnt>,
+}
+
+impl HandledObject {
+    fn new(obj: BpfObject) -> HandledObject {
+        HandledObject {
+            obj,
+            inserted_progs: Vec::new(),
+            pinnned_entities: Vec::new(),
+        }
+    }
+}
+
 lazy_static! {
-    static ref LOADED_OBJS: Mutex<HashMap<String, BpfObject>> = Mutex::new(HashMap::new());
-    static ref LOADED_PROGS: Mutex<HashMap<String, BpfProgram>> = Mutex::new(HashMap::new());
+    static ref LOADED_OBJS: Mutex<HashMap<String, HandledObject>> = Mutex::new(HashMap::new());
 }
 
 fn serialize_result(r: &CommandResult) -> Result<String, serde_json::Error> {
@@ -40,7 +84,10 @@ fn load_program(name: &str, path: &str) -> CommandResult {
 
     match object {
         Ok(o) => {
-            LOADED_OBJS.lock().unwrap().insert(name.to_string(), o);
+            LOADED_OBJS
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), HandledObject::new(o));
             CommandResult::Ok
         }
         Err(e) => CommandResult::Error(format!(
@@ -52,8 +99,8 @@ fn load_program(name: &str, path: &str) -> CommandResult {
 
 fn attach_program(obj_name: &str, prog_name: &str, ifname: &str) -> CommandResult {
     match LOADED_OBJS.lock().unwrap().get(obj_name) {
-        Some(obj) => {
-            let prog = obj.get_prog_by_name(prog_name);
+        Some(o) => {
+            let prog = o.obj.get_prog_by_name(prog_name);
 
             match prog {
                 Ok(p) => {
@@ -117,8 +164,8 @@ fn list_objects() -> String {
 
 fn list_obj_programs(name: &str) -> CommandResult {
     match LOADED_OBJS.lock().unwrap().get(name) {
-        Some(obj) => {
-            let programs = obj.get_progs_names().join("\n");
+        Some(o) => {
+            let programs = o.obj.get_progs_names().join("\n");
             CommandResult::Message(programs)
         }
         None => CommandResult::Error(format!("no obj with name {}", name)),
@@ -127,12 +174,16 @@ fn list_obj_programs(name: &str) -> CommandResult {
 
 fn list_obj_maps(name: &str) -> CommandResult {
     match LOADED_OBJS.lock().unwrap().get(name) {
-        Some(obj) => {
-            let maps = obj.get_maps_names().join("\n");
+        Some(o) => {
+            let maps = o.obj.get_maps_names().join("\n");
             CommandResult::Message(maps)
         }
         None => CommandResult::Error(format!("no obj with name {}", name)),
     }
+}
+
+fn obj_pin(obj_name: &str, pin_name: &str, pin_path: &str) -> CommandResult {
+    CommandResult::Ok
 }
 
 #[tokio::main]
@@ -192,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut s = s.split(" ").collect::<Vec<&str>>();
                         s.reverse();
 
-                        let l1_commands = vec!["load, list, attach", "help"];
+                        let l1_commands = vec!["load, list, attach", "pin", "help"];
 
                         match s.pop() {
                             Some("help") => CommandResult::Message(format!(
@@ -291,6 +342,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     )),
                                 }
                             }
+                            Some("pin") => {
+                                let pin_arguments = vec!["obj_name", "pin_name", "pin_path"];
+                                match (s.pop(), s.pop(), s.pop()) {
+                                    (a, b, c)
+                                        if a == Some("help")
+                                            || b == Some("help")
+                                            || c == Some("help") =>
+                                    {
+                                        CommandResult::Message(format!(
+                                            "available arguments for pin:\n\t {}",
+                                            pin_arguments.join(" ")
+                                        ))
+                                    }
+                                    (Some(a), Some(b), Some(c)) => obj_pin(a, b, c),
+                                    (a, b, c) => CommandResult::Error(format!(
+                                        "pin: could not parse {:?} {:?} {:?}",
+                                        a, b, c
+                                    )),
+                                }
+                            }
                             Some(c) => CommandResult::Error(format!(
                                 "unknown command {}, available: {}",
                                 c,
@@ -322,51 +393,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 }
-
-// fn main() -> Result<(), String> {
-//     let object1 = BpfObjectLoader::new()
-//         .with_file_name("objs/main_module.o")
-//         .with_prog_type(BPF_PROG_TYPE_XDP)
-//         .load()?;
-
-//     object1
-//         .programs()
-//         .for_each(|prog| println!("object 1 got program: {}", prog.get_title_owned().unwrap()));
-
-//     let object2 = BpfObjectLoader::new()
-//         .with_file_name("objs/tail_call.o")
-//         .with_prog_type(BPF_PROG_TYPE_XDP)
-//         .load()?;
-
-//     object2
-//         .programs()
-//         .for_each(|prog| println!("object 2 got program {}", prog.get_title_owned().unwrap()));
-
-//     let first_prog = object1.get_prog_by_name("xdp_tail_call0")?;
-//     let second_prog = object2.get_prog_by_name("xdp_tail_call1")?;
-
-//     let mut prog_maps1 = object1
-//         .get_map_by_name::<u32, u32>("xdp_progs_map")?
-//         .get_fd()?;
-
-//     let k = 0_u32;
-
-//     prog_maps1.update_elem(&k, &(second_prog.get_fd()? as u32), BPF_ANY)?;
-
-//     let prog_maps2 = object2.get_map_by_name::<u32, u32>("xdp_progs_map")?;
-
-//     prog_maps2.reuse_fd(prog_maps1)?;
-
-//     first_prog
-//         .get_attacher()?
-//         .with_if("lo")?
-//         .update_if_noexist()
-//         .in_skb_mode()
-//         .detach()?
-//         .attach()?;
-
-//     println!("xdp program attached to lo");
-
-//     while true {}
-//     Ok(())
-// }

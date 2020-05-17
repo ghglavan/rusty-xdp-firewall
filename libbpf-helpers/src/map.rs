@@ -18,6 +18,8 @@ pub fn get_name_raw(map: &*const bpf_map) -> Result<&str, String> {
     })
 }
 
+pub type MapFDRaw = i32;
+
 impl<K, V> BpfMap<K, V> {
     pub fn get_fd(&self) -> Result<BpfMapFd<K, V>, String> {
         let fd = unsafe { bpf_map__fd(self.bpf_map) };
@@ -31,6 +33,10 @@ impl<K, V> BpfMap<K, V> {
             _k: std::marker::PhantomData,
             _v: std::marker::PhantomData,
         })
+    }
+
+    pub fn get_fd_raw(&self) -> Result<MapFDRaw, String> {
+        Ok(self.get_fd()?.inner_fd)
     }
 
     pub fn get_name(&self) -> Result<&str, String> {
@@ -91,12 +97,16 @@ impl<K, V> BpfMap<K, V> {
 }
 
 pub struct BpfMapFd<K, V> {
-    inner_fd: i32,
+    inner_fd: MapFDRaw,
     _k: std::marker::PhantomData<K>,
     _v: std::marker::PhantomData<V>,
 }
 
 impl<K, V> BpfMapFd<K, V> {
+    pub fn get_fd_raw(&self) -> MapFDRaw {
+        self.inner_fd
+    }
+
     pub fn from_pinned_map(path: &str) -> Result<Self, String> {
         let fd = unsafe { bpf_obj_get(CString::new(path).unwrap().as_ptr()) };
 
