@@ -3,14 +3,7 @@ use std::ffi::{CStr, CString};
 
 use std::iter::Iterator;
 
-#[derive(Debug)]
-pub struct BpfMap<K, V> {
-    pub(crate) bpf_map: *mut bpf_map,
-    pub(crate) _k: std::marker::PhantomData<K>,
-    pub(crate) _v: std::marker::PhantomData<V>,
-}
-
-pub fn get_name_raw(map: &*const bpf_map) -> Result<&str, String> {
+pub fn get_map_name_raw(map: &*const bpf_map) -> Result<&str, String> {
     Ok(unsafe {
         CStr::from_ptr(bpf_map__name(*map))
             .to_str()
@@ -20,8 +13,35 @@ pub fn get_name_raw(map: &*const bpf_map) -> Result<&str, String> {
 
 pub type MapFDRaw = i32;
 
-impl<K, V> BpfMap<K, V> {
-    pub fn get_fd(&self) -> Result<BpfMapFd<K, V>, String> {
+#[derive(Debug)]
+pub struct BpfMap {
+    pub(crate) bpf_map: *mut bpf_map,
+    pub(crate) key_size: usize,
+    pub(crate) value_size: usize,
+}
+
+unsafe impl Send for BpfMap {}
+unsafe impl Sync for BpfMap {}
+
+impl BpfMap {
+    pub fn new(m: *mut bpf_map) -> Result<BpfMap, String> {
+        let map_def = unsafe { bpf_map__def(m) };
+        if map_def == std::ptr::null() {
+            return Err("error getting map_def".to_string());
+        }
+
+        let key_size = unsafe { (*map_def).key_size } as usize;
+
+        let value_size = unsafe { (*map_def).value_size } as usize;
+
+        Ok(BpfMap {
+            bpf_map: m,
+            key_size,
+            value_size,
+        })
+    }
+
+    pub fn get_fd(&self) -> Result<BpfMapFd, String> {
         let fd = unsafe { bpf_map__fd(self.bpf_map) };
 
         if fd < 0 {
@@ -30,13 +50,21 @@ impl<K, V> BpfMap<K, V> {
 
         Ok(BpfMapFd {
             inner_fd: fd,
-            _k: std::marker::PhantomData,
-            _v: std::marker::PhantomData,
+            key_size: self.key_size,
+            value_size: self.value_size,
         })
     }
 
     pub fn get_fd_raw(&self) -> Result<MapFDRaw, String> {
         Ok(self.get_fd()?.inner_fd)
+    }
+
+    pub fn get_map_type(&self) -> Result<bpf_map_type, String> {
+        let map_def = unsafe { bpf_map__def(self.bpf_map) };
+        if map_def == std::ptr::null() {
+            return Err("error getting map_def".to_string());
+        }
+        unsafe { return Ok((*map_def).type_) }
     }
 
     pub fn get_name(&self) -> Result<&str, String> {
@@ -75,7 +103,7 @@ impl<K, V> BpfMap<K, V> {
         unsafe { bpf_map__btf_value_type_id(self.bpf_map) }
     }
 
-    pub fn reuse_fd(&self, map_fd: BpfMapFd<K, V>) -> Result<(), String> {
+    pub fn reuse_fd(&self, map_fd: BpfMapFd) -> Result<(), String> {
         let ret = unsafe { bpf_map__reuse_fd(self.bpf_map, map_fd.inner_fd) };
 
         if ret != 0 {
@@ -96,18 +124,18 @@ impl<K, V> BpfMap<K, V> {
     }
 }
 
-pub struct BpfMapFd<K, V> {
+pub struct BpfMapFd {
     inner_fd: MapFDRaw,
-    _k: std::marker::PhantomData<K>,
-    _v: std::marker::PhantomData<V>,
+    pub(crate) key_size: usize,
+    pub(crate) value_size: usize,
 }
 
-impl<K, V> BpfMapFd<K, V> {
+impl BpfMapFd {
     pub fn get_fd_raw(&self) -> MapFDRaw {
         self.inner_fd
     }
 
-    pub fn from_pinned_map(path: &str) -> Result<Self, String> {
+    pub fn from_pinned_map(path: &str, key_size: usize, value_size: usize) -> Result<Self, String> {
         let fd = unsafe { bpf_obj_get(CString::new(path).unwrap().as_ptr()) };
 
         if fd < 0 {
@@ -116,18 +144,41 @@ impl<K, V> BpfMapFd<K, V> {
 
         Ok(BpfMapFd {
             inner_fd: fd,
-            _k: std::marker::PhantomData,
-            _v: std::marker::PhantomData,
+            key_size,
+            value_size,
         })
     }
 
     //flags: BPF_ANY, BPF_EXIST, BPF_NO_EXIST, BFP_F_LOCK
-    pub fn update_elem(&mut self, key: &K, value: &V, flags: u32) -> Result<(), String> {
+    pub fn update_elem(
+        &mut self,
+        key: &Vec<u8>,
+        value: &Vec<u8>,
+        flags: u32,
+    ) -> Result<(), String> {
+        if key.len() < self.key_size {
+            bail!(format!(
+                "wronng key size: expected {} got {}",
+                self.key_size,
+                key.len()
+            ))
+        }
+        if value.len() < self.value_size {
+            bail!(format!(
+                "wronng value size: expected {} got {}",
+                self.value_size,
+                value.len()
+            ))
+        }
+
+        let k = key.as_slice();
+        let v = value.as_slice();
+
         let ret = unsafe {
             bpf_map_update_elem(
                 self.inner_fd,
-                key as *const K as *const core::ffi::c_void,
-                value as *const V as *const core::ffi::c_void,
+                k.as_ptr() as *const u8 as *const core::ffi::c_void,
+                v.as_ptr() as *const u8 as *const core::ffi::c_void,
                 flags as u64,
             )
         };
@@ -139,13 +190,22 @@ impl<K, V> BpfMapFd<K, V> {
         Ok(())
     }
 
-    pub fn lookup_elem_flags(&self, key: &K, flags: u32) -> Result<V, String> {
-        let v: V = unsafe { std::mem::zeroed() };
+    pub fn lookup_elem_flags(&self, key: &Vec<u8>, flags: u32) -> Result<Vec<u8>, String> {
+        if key.len() < self.key_size {
+            bail!(format!(
+                "wronng key size: expected {} got {}",
+                self.key_size,
+                key.len()
+            ))
+        }
+        let vc: Vec<u8> = vec![0 as u8; self.value_size];
+        let v = vc.as_slice();
+        let k = key.as_slice();
         let ret = unsafe {
             bpf_map_lookup_elem_flags(
                 self.inner_fd,
-                key as *const K as *const core::ffi::c_void,
-                &v as *const V as *mut core::ffi::c_void,
+                k.as_ptr() as *const u8 as *const core::ffi::c_void,
+                v.as_ptr() as *const u8 as *mut core::ffi::c_void,
                 flags as u64,
             )
         };
@@ -154,20 +214,29 @@ impl<K, V> BpfMapFd<K, V> {
             bail!(format!("error looking up for elem with flags {}", flags));
         }
 
-        Ok(v)
+        Ok(v.to_vec())
     }
 
-    pub fn lookup_elem(&self, key: &K) -> Result<V, String> {
+    pub fn lookup_elem(&self, key: &Vec<u8>) -> Result<Vec<u8>, String> {
         self.lookup_elem_flags(key, BPF_ANY)
     }
 
-    pub fn lookup_and_delete_elem(&mut self, key: &K) -> Result<V, String> {
-        let v: V = unsafe { std::mem::zeroed() };
+    pub fn lookup_and_delete_elem(&mut self, key: &Vec<u8>) -> Result<Vec<u8>, String> {
+        if key.len() < self.key_size {
+            bail!(format!(
+                "wronng key size: expected {} got {}",
+                self.key_size,
+                key.len()
+            ))
+        }
+        let vc: Vec<u8> = vec![0 as u8; self.value_size];
+        let v = vc.as_slice();
+        let k = key.as_slice();
         let ret = unsafe {
             bpf_map_lookup_and_delete_elem(
                 self.inner_fd,
-                key as *const K as *const core::ffi::c_void,
-                &v as *const V as *mut core::ffi::c_void,
+                k.as_ptr() as *const u8 as *const core::ffi::c_void,
+                v.as_ptr() as *const u8 as *mut core::ffi::c_void,
             )
         };
 
@@ -175,12 +244,23 @@ impl<K, V> BpfMapFd<K, V> {
             bail!("error looking up and deleting element")
         }
 
-        Ok(v)
+        Ok(v.to_vec())
     }
 
-    pub fn delete_elem(&mut self, key: &K) -> Result<(), String> {
+    pub fn delete_elem(&mut self, key: &Vec<u8>) -> Result<(), String> {
+        if key.len() < self.key_size {
+            bail!(format!(
+                "wronng key size: expected {} got {}",
+                self.key_size,
+                key.len()
+            ))
+        }
+        let k = key.as_slice();
         let ret = unsafe {
-            bpf_map_delete_elem(self.inner_fd, key as *const K as *const core::ffi::c_void)
+            bpf_map_delete_elem(
+                self.inner_fd,
+                k.as_ptr() as *const u8 as *const core::ffi::c_void,
+            )
         };
 
         if ret != 0 {
@@ -198,31 +278,35 @@ impl<K, V> BpfMapFd<K, V> {
         Ok(())
     }
 
-    pub fn keys(&self, unused_key: K) -> MapKeys<K> {
+    pub fn keys(&self) -> MapKeys {
         MapKeys {
             map_fd: self.inner_fd,
+            key_size: self.key_size,
             current_key: None,
-            unused_key,
+            unused_key: vec![0 as u8; self.key_size],
         }
     }
 }
 
-pub struct MapKeys<K> {
+pub struct MapKeys {
     map_fd: i32,
-    current_key: Option<K>,
-    unused_key: K,
+    key_size: usize,
+    current_key: Option<Vec<u8>>,
+    unused_key: Vec<u8>,
 }
 
-impl<K: Copy> Iterator for MapKeys<K> {
-    type Item = K;
-    fn next(&mut self) -> Option<K> {
+impl Iterator for MapKeys {
+    type Item = Vec<u8>;
+    fn next(&mut self) -> Option<Vec<u8>> {
         if let Some(k) = &self.current_key {
-            let next: K = unsafe { std::mem::zeroed() };
+            let vnext: Vec<u8> = vec![0 as u8; self.key_size];
+            let next = vnext.as_slice();
+            let key = k.as_slice();
             let ret = unsafe {
                 bpf_map_get_next_key(
                     self.map_fd,
-                    k as *const K as *const core::ffi::c_void,
-                    &next as *const K as *mut core::ffi::c_void,
+                    key.as_ptr() as *const u8 as *const core::ffi::c_void,
+                    next.as_ptr() as *const u8 as *mut core::ffi::c_void,
                 )
             };
 
@@ -230,16 +314,18 @@ impl<K: Copy> Iterator for MapKeys<K> {
                 return None;
             }
 
-            self.current_key = Some(next);
-            return self.current_key;
+            self.current_key = Some(next.to_vec());
+            return self.current_key.clone();
         };
 
-        let next: K = unsafe { std::mem::zeroed() };
+        let vnext: Vec<u8> = vec![0 as u8; self.key_size];
+        let next = vnext.as_slice();
+        let k = self.unused_key.as_slice();
         let ret = unsafe {
             bpf_map_get_next_key(
                 self.map_fd,
-                &self.unused_key as *const K as *const core::ffi::c_void,
-                &next as *const K as *mut core::ffi::c_void,
+                k.as_ptr() as *const u8 as *const core::ffi::c_void,
+                next.as_ptr() as *const u8 as *mut core::ffi::c_void,
             )
         };
 
@@ -247,15 +333,15 @@ impl<K: Copy> Iterator for MapKeys<K> {
             return None;
         }
 
-        self.current_key = Some(next);
-        self.current_key
+        self.current_key = Some(next.to_vec());
+        self.current_key.clone()
     }
 }
 
-pub struct BpfMapCreator<K, V> {
+pub struct BpfMapCreator {
     attrs: bpf_create_map_attr,
-    _k: std::marker::PhantomData<K>,
-    _v: std::marker::PhantomData<V>,
+    key_size: usize,
+    value_size: usize,
 }
 
 macro_rules! fn_with_u32_arg {
@@ -267,12 +353,12 @@ macro_rules! fn_with_u32_arg {
     };
 }
 
-impl<K, V> BpfMapCreator<K, V> {
-    pub fn new() -> Self {
+impl BpfMapCreator {
+    pub fn new(key_size: usize, value_size: usize) -> Self {
         BpfMapCreator {
             attrs: bpf_create_map_attr::default(),
-            _k: std::marker::PhantomData,
-            _v: std::marker::PhantomData,
+            key_size,
+            value_size,
         }
     }
 
@@ -296,9 +382,9 @@ impl<K, V> BpfMapCreator<K, V> {
         self
     }
 
-    pub fn create(&mut self) -> Result<BpfMapFd<K, V>, String> {
-        self.attrs.key_size = std::mem::size_of::<K>() as u32;
-        self.attrs.value_size = std::mem::size_of::<V>() as u32;
+    pub fn create(&mut self) -> Result<BpfMapFd, String> {
+        self.attrs.key_size = self.key_size as u32;
+        self.attrs.value_size = self.value_size as u32;
         let fd = unsafe { bpf_create_map_xattr(&self.attrs as *const bpf_create_map_attr) };
 
         if fd < 0 {
@@ -307,8 +393,8 @@ impl<K, V> BpfMapCreator<K, V> {
 
         Ok(BpfMapFd {
             inner_fd: fd,
-            _k: std::marker::PhantomData,
-            _v: std::marker::PhantomData,
+            key_size: self.key_size,
+            value_size: self.value_size,
         })
     }
 }

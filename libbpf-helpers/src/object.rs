@@ -13,6 +13,12 @@ pub struct BpfObject {
 unsafe impl Send for BpfObject {}
 unsafe impl Sync for BpfObject {}
 
+impl Drop for BpfObject {
+    fn drop(&mut self) {
+        self.unload();
+    }
+}
+
 impl BpfObject {
     pub fn get_name(&self) -> Result<String, String> {
         unsafe {
@@ -26,13 +32,13 @@ impl BpfObject {
 
     pub fn get_progs_names(&self) -> Vec<String> {
         self.programs()
-            .map(|prog| prog.get_title_owned().unwrap())
+            .map(|prog| get_prog_name_raw(&prog).unwrap().to_string())
             .collect()
     }
 
     pub fn get_maps_names(&self) -> Vec<String> {
         self.maps()
-            .map(|m| get_name_raw(&m).unwrap().to_string())
+            .map(|m| get_map_name_raw(&m).unwrap().to_string())
             .collect()
     }
 
@@ -48,7 +54,7 @@ impl BpfObject {
         Ok(BpfProgram { bpf_prog: prog })
     }
 
-    pub fn get_map_by_name<K, V>(&self, name: &str) -> Result<BpfMap<K, V>, String> {
+    pub fn get_map_by_name(&self, name: &str) -> Result<BpfMap, String> {
         let map: *mut bpf_map = unsafe {
             bpf_object__find_map_by_name(self.bpf_obj, CString::new(name).unwrap().as_ptr())
         };
@@ -57,11 +63,7 @@ impl BpfObject {
             bail!(format!("error getting map by name. name: {}", name))
         }
 
-        Ok(BpfMap {
-            bpf_map: map,
-            _k: std::marker::PhantomData,
-            _v: std::marker::PhantomData,
-        })
+        BpfMap::new(map)
     }
 
     pub fn pin_maps(&self, path: &str) -> Result<(), String> {
@@ -120,7 +122,7 @@ impl BpfObject {
         return Some(next);
     }
 
-    fn next_prog(&self, bpf_prog_o: Option<BpfProgram>) -> Option<BpfProgram> {
+    fn next_prog(&self, bpf_prog_o: Option<*mut bpf_program>) -> Option<*mut bpf_program> {
         if None == bpf_prog_o {
             let prog = unsafe { bpf_program__next(std::ptr::null_mut(), self.bpf_obj) };
 
@@ -128,19 +130,19 @@ impl BpfObject {
                 return None;
             }
 
-            return Some(BpfProgram { bpf_prog: prog });
+            return Some(prog);
         }
 
-        let next = unsafe { bpf_program__next(bpf_prog_o.unwrap().bpf_prog, self.bpf_obj) };
+        let next = unsafe { bpf_program__next(bpf_prog_o.unwrap(), self.bpf_obj) };
 
         if next == std::ptr::null_mut() {
             return None;
         }
 
-        return Some(BpfProgram { bpf_prog: next });
+        return Some(next);
     }
 
-    fn unload(&self) {
+    pub fn unload(&mut self) {
         unsafe { bpf_object__unload(self.bpf_obj) };
     }
 }
@@ -161,12 +163,12 @@ impl<'a> Iterator for BpfMaps<'a> {
 
 pub struct BpfPrograms<'a> {
     bpf_obj: &'a BpfObject,
-    bpf_prog_current: Option<BpfProgram>,
+    bpf_prog_current: Option<*mut bpf_program>,
 }
 
 impl<'a> Iterator for BpfPrograms<'a> {
-    type Item = BpfProgram;
-    fn next(&mut self) -> Option<BpfProgram> {
+    type Item = *mut bpf_program;
+    fn next(&mut self) -> Option<Self::Item> {
         let next = self.bpf_obj.next_prog(self.bpf_prog_current);
         self.bpf_prog_current = next;
         self.bpf_prog_current

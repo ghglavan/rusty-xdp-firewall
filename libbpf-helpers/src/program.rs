@@ -5,13 +5,27 @@ use std::ffi::CStr;
 
 pub type ProgFDRaw = i32;
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+pub fn get_prog_name_raw(p: &*mut bpf_program) -> Result<&str, String> {
+    Ok(unsafe {
+        CStr::from_ptr(bpf_program__title(*p, false))
+            .to_str()
+            .map_err(|e| format!("error getting program title: {}", e))?
+    })
+}
+
+#[derive(PartialEq, Eq, Clone)]
 pub struct BpfProgram {
     pub(crate) bpf_prog: *mut bpf_program,
 }
 
 unsafe impl Send for BpfProgram {}
 unsafe impl Sync for BpfProgram {}
+
+impl Drop for BpfProgram {
+    fn drop(&mut self) {
+        self.unload()
+    }
+}
 
 impl BpfProgram {
     pub fn get_fd(&self) -> Result<ProgFDRaw, String> {
@@ -50,5 +64,9 @@ impl BpfProgram {
             ifindex: 0,
             flags: 0,
         })
+    }
+
+    pub fn unload(&mut self) {
+        unsafe { bpf_program__unload(self.bpf_prog) };
     }
 }

@@ -79,7 +79,7 @@ mod tests {
             .load();
         assert!(object.is_ok());
         let object = object.unwrap();
-        let map = object.get_map_by_name::<u32, u32>("xdp_test_map");
+        let map = object.get_map_by_name("xdp_test_map");
         assert!(map.is_ok());
         let map = map.unwrap();
 
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_map_create() {
-        let m = crate::map::BpfMapCreator::<u32, u32>::new()
+        let m = crate::map::BpfMapCreator::new(1, 1)
             .with_name("m")
             .with_type(crate::raw_libbpf::BPF_MAP_TYPE_ARRAY)
             .with_max_entries(100)
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_hash_map_ops() {
-        let m = crate::map::BpfMapCreator::<u32, u32>::new()
+        let m = crate::map::BpfMapCreator::new(1, 1)
             .with_name("m")
             .with_type(crate::raw_libbpf::BPF_MAP_TYPE_HASH)
             .with_max_entries(100)
@@ -123,27 +123,27 @@ mod tests {
 
         assert!(m.is_ok());
         let mut m = m.unwrap();
-        let mut k = 10_u32;
-        let mut v = 3_u32;
+        let mut k = vec![10 as u8];
+        let mut v = vec![3 as u8];
         assert!(m.update_elem(&k, &v, crate::raw_libbpf::BPF_ANY).is_ok());
         assert!(m.update_elem(&k, &k, crate::raw_libbpf::BPF_EXIST).is_ok());
         assert!(m
             .update_elem(&k, &v, crate::raw_libbpf::BPF_NOEXIST)
             .is_err());
 
-        k = 1;
+        k = vec![1 as u8];
         assert!(m
             .update_elem(&k, &v, crate::raw_libbpf::BPF_NOEXIST)
             .is_ok());
-        k = 2;
-        v = 7;
+        k = vec![2 as u8];
+        v = vec![7 as u8];
         assert!(m
             .update_elem(&k, &v, crate::raw_libbpf::BPF_NOEXIST)
             .is_ok());
 
         let l = m.lookup_elem(&k);
         assert!(l.is_ok());
-        assert!(l.unwrap() == 7);
+        assert!(l.unwrap() == vec![7 as u8]);
 
         let l = m.lookup_elem_flags(&k, crate::raw_libbpf::BPF_EXIST);
         assert!(l.is_err());
@@ -156,15 +156,14 @@ mod tests {
         let l = m.delete_elem(&k);
         assert!(l.is_ok());
 
-        let unused_key = 0_u32;
-        let mut v = m.keys(unused_key).collect::<Vec<u32>>();
+        let mut v = m.keys().collect::<Vec<Vec<u8>>>();
         v.sort();
-        assert!(v == vec![1, 10]);
+        assert!(v == vec![vec![1 as u8], vec![10 as u8]]);
     }
 
     #[test]
     fn test_array_map_ops() {
-        let m = crate::map::BpfMapCreator::<u32, u32>::new()
+        let m = crate::map::BpfMapCreator::new(1, 1)
             .with_name("array_m")
             .with_type(crate::raw_libbpf::BPF_MAP_TYPE_ARRAY)
             .with_max_entries(100)
@@ -173,8 +172,8 @@ mod tests {
         assert!(m.is_ok());
 
         let mut m = m.unwrap();
-        let k = 10_u32;
-        let v = 3_u32;
+        let k = vec![10 as u8];
+        let v = vec![3 as u8];
 
         assert!(m.update_elem(&k, &v, crate::raw_libbpf::BPF_ANY).is_ok());
     }
@@ -187,14 +186,14 @@ mod tests {
             .load();
         assert!(object.is_ok());
         let object = object.unwrap();
-        let map = object.get_map_by_name::<u32, u32>("xdp_test_map");
+        let map = object.get_map_by_name("xdp_test_map");
         assert!(map.is_ok());
         let map = map.unwrap();
         let m = map.get_fd();
         assert!(m.is_ok());
         let m = m.unwrap();
 
-        let k = 0_u32;
+        let k = vec![0 as u8; 4];
         let l = m.lookup_elem_flags(&k, crate::raw_libbpf::BPF_F_LOCK);
         assert!(l.is_ok());
     }
