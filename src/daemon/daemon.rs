@@ -100,6 +100,10 @@ fn serialize_result(r: &CommandResult) -> Result<String, serde_json::Error> {
     serde_json::to_string(r)
 }
 
+fn deserialize_vars(s: &String) -> Result<HashMap<String, Vec<u8>>, serde_json::Error> {
+    serde_json::from_str(s)
+}
+
 fn validate_obj(obj: &BpfObject) -> Result<(), String> {
     let m = obj.get_map_by_name(PROGS_MAP)?;
     let t = m.get_map_type()?;
@@ -314,6 +318,110 @@ fn obj_pin(obj_name: &str, pin_name: &str, pin_path: &str) -> CommandResult {
     CommandResult::Ok
 }
 
+fn obj_get_map_fd(obj_name: &str, map_name: &str) -> Result<BpfMapFd, String> {
+    match LOADED_OBJS.lock().unwrap().get(obj_name) {
+        Some(o) => o.obj.get_map_by_name(map_name)?.get_fd(),
+        None => Err(format!("{} object not loaded", obj_name)),
+    }
+}
+
+fn obj_get_map(obj_name: &str, map_name: &str) -> Result<BpfMap, String> {
+    match LOADED_OBJS.lock().unwrap().get(obj_name) {
+        Some(o) => o.obj.get_map_by_name(map_name),
+        None => Err(format!("{} object not loaded", obj_name)),
+    }
+}
+
+fn write_map(
+    obj_name: &str,
+    map_name: &str,
+    key: &str,
+    val: &str,
+    vars: &HashMap<String, Vec<u8>>,
+) -> CommandResult {
+    match obj_get_map_fd(obj_name, map_name) {
+        Ok(mut fd) => {
+            let k = match vars.get(key) {
+                Some(vec) => vec,
+                None => return CommandResult::Error(format!("no key found with name {}", key)),
+            };
+            let v = match vars.get(val) {
+                Some(vec) => vec,
+                None => return CommandResult::Error(format!("no val found with name {}", val)),
+            };
+
+            match fd.update_elem(k, v, BPF_ANY) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => {
+                    CommandResult::Error(format!("error updating elem {}-{}: {}", key, val, e))
+                }
+            }
+        }
+        Err(e) => CommandResult::Error(format!("could not get map from obj: {}", e)),
+    }
+}
+
+fn read_map(
+    obj_name: &str,
+    map_name: &str,
+    key: &str,
+    vars: &HashMap<String, Vec<u8>>,
+) -> CommandResult {
+    match obj_get_map_fd(obj_name, map_name) {
+        Ok(mut fd) => {
+            let k = match vars.get(key) {
+                Some(vec) => vec,
+                None => return CommandResult::Error(format!("no key found with name {}", key)),
+            };
+
+            match fd.lookup_elem(k) {
+                Ok(v) => CommandResult::RawBytes(v),
+                Err(e) => CommandResult::Error(format!("error looking for {}: {}", key, e)),
+            }
+        }
+        Err(e) => CommandResult::Error(format!("could not get map from obj: {}", e)),
+    }
+}
+
+fn delete_map(
+    obj_name: &str,
+    map_name: &str,
+    key: &str,
+    vars: &HashMap<String, Vec<u8>>,
+) -> CommandResult {
+    match obj_get_map_fd(obj_name, map_name) {
+        Ok(mut fd) => {
+            let k = match vars.get(key) {
+                Some(vec) => vec,
+                None => return CommandResult::Error(format!("no key found with name {}", key)),
+            };
+
+            match fd.delete_elem(k) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Error(format!("error deleting {}: {}", key, e)),
+            }
+        }
+        Err(e) => CommandResult::Error(format!("could not get map from obj: {}", e)),
+    }
+}
+
+fn reuse_map(obj_name: &str, map_name: &str, reuse_obj: &str, reuse_map: &str) -> CommandResult {
+    let mut map1 = match obj_get_map(obj_name, map_name) {
+        Ok(m) => m,
+        Err(e) => return CommandResult::Error(format!("error getting map: {}", e)),
+    };
+
+    let reuse_map_fd = match obj_get_map_fd(reuse_obj, reuse_map) {
+        Ok(m) => m,
+        Err(e) => return CommandResult::Error(format!("error getting reuse_map: {}", e)),
+    };
+
+    match map1.reuse_fd(reuse_map_fd) {
+        Ok(()) => CommandResult::Ok,
+        Err(e) => CommandResult::Error(format!("error reusing fd: {}", e)),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let main_app = clap_app!(rusty_daemon =>
@@ -395,10 +503,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let s = command_string
                             .trim_matches(char::from(0))
                             .trim_matches(char::from(10));
+                        let lines = s.split("\n").collect::<Vec<&str>>();
+
+                        if lines.len() == 0 {
+                            continue;
+                        }
+
+                        let vars: HashMap<String, Vec<u8>> = if lines.len() > 1 {
+                            match deserialize_vars(&lines[1].to_string()) {
+                                Ok(h) => h,
+                                Err(e) => HashMap::new(),
+                            }
+                        } else {
+                            HashMap::new()
+                        };
+
+                        let s = lines[0];
+
                         let mut s = s.split(" ").collect::<Vec<&str>>();
                         s.reverse();
 
-                        let l1_commands = vec!["load", "list", "tail", "attach", "pin", "help"];
+                        let l1_commands =
+                            vec!["load", "list", "tail", "attach", "map", "pin", "help"];
 
                         match s.pop() {
                             Some("help") => CommandResult::Message(format!(
@@ -466,6 +592,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "list: could not parse {:?}",
                                         a
                                     )),
+                                }
+                            }
+                            Some("map") => {
+                                let map_args = vec!["read", "write", "delete", "reuse"];
+                                match s.pop() {
+                                    Some("help") => CommandResult::Message(format!(
+                                        "available commands for map: \n\t{}",
+                                        map_args.join(" ")
+                                    )),
+                                    Some("write") => {
+                                        let write_args =
+                                            vec!["object", "map_name", "key_var", "val_var"];
+                                        match (s.pop(), s.pop(), s.pop(), s.pop()) {
+                                            (
+                                                Some(obj),
+                                                Some(map_name),
+                                                Some(key_var),
+                                                Some(val_var),
+                                            ) => write_map(
+                                                &obj, &map_name, &key_var, &val_var, &vars,
+                                            ),
+                                            (a, b, c, d)
+                                                if a == Some("help")
+                                                    || b == Some("help")
+                                                    || c == Some("help")
+                                                    || d == Some("help") =>
+                                            {
+                                                CommandResult::Message(format!(
+                                                    "available arguments for write: {}",
+                                                    write_args.join(" ")
+                                                ))
+                                            }
+                                            a => CommandResult::Error(format!(
+                                                "write could not parse {:?}",
+                                                a
+                                            )),
+                                        }
+                                    }
+                                    Some("read") => {
+                                        let read_args = vec!["object", "map_name", "key_var"];
+                                        match (s.pop(), s.pop(), s.pop()) {
+                                            (Some(obj), Some(map_name), Some(key_var)) => {
+                                                read_map(&obj, &map_name, &key_var, &vars)
+                                            }
+                                            (a, b, c)
+                                                if a == Some("help")
+                                                    || b == Some("help")
+                                                    || c == Some("help") =>
+                                            {
+                                                CommandResult::Message(format!(
+                                                    "available arguments for read: {}",
+                                                    read_args.join(" ")
+                                                ))
+                                            }
+                                            a => CommandResult::Error(format!(
+                                                "read could not parse {:?}",
+                                                a
+                                            )),
+                                        }
+                                    }
+                                    Some("delete") => {
+                                        let delete_args = vec!["object", "map_name", "key_vars"];
+                                        match (s.pop(), s.pop(), s.pop()) {
+                                            (Some(obj), Some(map_name), Some(key_var)) => {
+                                                delete_map(&obj, &map_name, &key_var, &vars)
+                                            }
+                                            (a, b, c)
+                                                if a == Some("help")
+                                                    || b == Some("help")
+                                                    || c == Some("help") =>
+                                            {
+                                                CommandResult::Message(format!(
+                                                    "available arguments for delete: {}",
+                                                    delete_args.join(" ")
+                                                ))
+                                            }
+                                            a => CommandResult::Error(format!(
+                                                "delete could not parse {:?}",
+                                                a
+                                            )),
+                                        }
+                                    }
+                                    Some("reuse") => {
+                                        let reuse_args = vec!["object", "map_name", "reuse_object"];
+                                        match (s.pop(), s.pop(), s.pop(), s.pop()) {
+                                            (
+                                                Some(obj),
+                                                Some(map_name),
+                                                Some(reuse_obj),
+                                                Some(reuse_m),
+                                            ) => reuse_map(&obj, &map_name, &reuse_obj, &reuse_m),
+                                            (a, b, c, d)
+                                                if a == Some("help")
+                                                    || b == Some("help")
+                                                    || c == Some("help")
+                                                    || d == Some("help") =>
+                                            {
+                                                CommandResult::Message(format!(
+                                                    "available arguments for reuse: {}",
+                                                    reuse_args.join(" ")
+                                                ))
+                                            }
+                                            a => CommandResult::Error(format!(
+                                                "reuse could not parse {:?}",
+                                                a
+                                            )),
+                                        }
+                                    }
+                                    a => {
+                                        CommandResult::Error(format!("map could not marse {:?}", a))
+                                    }
                                 }
                             }
                             Some("attach") => {

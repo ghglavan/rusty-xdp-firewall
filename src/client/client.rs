@@ -16,7 +16,15 @@ use std::net::TcpStream;
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
+#[macro_use]
+extern crate lazy_static;
+use std::sync::Mutex;
+
 use clap::{App, Arg};
+
+lazy_static! {
+    static ref RESULT_VAR: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+}
 
 fn deserialize_result(r: &str) -> Result<CommandResult, serde_json::Error> {
     serde_json::from_str(r)
@@ -50,6 +58,10 @@ fn send_command(
             }
             CommandResult::Message(m) => {
                 println!("{}", m);
+            }
+            CommandResult::RawBytes(vec) => {
+                println!("Got raw bytes, you can find it in $RES variable: {:?}", vec);
+                *(RESULT_VAR.lock().unwrap()) = vec;
             }
         },
         Err(e) => {
@@ -145,12 +157,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
 
-            if args[0] == "map" {
-                if args.len() == 4 && args[1] == "parser" {
-                    let (p_name, p_cmd) = (args[2], args[3]);
+            if args[0] == "parser" {
+                if args.len() == 3 {
+                    let (p_name, p_cmd) = (args[1], args[2]);
                     parsers.insert(p_name.to_string(), p_cmd.to_string());
                     info!("added parser {} with cmd {} to parsers", p_name, p_cmd);
                     continue;
+                } else {
+                    error!("expected 3 args for parser. GOT: {}", args.len());
+                }
+            }
+
+            if args[0] == "revparser" {
+                if args.len() == 2 {
+                    let parser = args[1];
+                    let parser_cmd = match parsers.get(parser) {
+                        Some(p) => p,
+                        None => {
+                            error!("no parser found with name {}", parser);
+                            continue;
+                        }
+                    };
+
+                    let p = Command::new(parser_cmd).arg("-r").spawn();
+                    if let Err(e) = p {
+                        error!("error executing parser: {}", e);
+                        continue;
+                    }
+
+                    let mut p = p.unwrap();
+                    {
+                        let child_stdin = p.stdin.as_mut().unwrap();
+                        match child_stdin.write_all(&(*(RESULT_VAR.lock().unwrap()))) {
+                            Ok(()) => (),
+                            Err(e) => error!("error sending to revparsers: {}", e),
+                        };
+                    }
+
+                    let p = p.wait_with_output()?;
+
+                    let bytes = p.stdout;
+                    if bytes.len() == 0 {
+                        error!("coult not revparse {:?}", bytes);
+                        match std::str::from_utf8(&p.stderr[..]) {
+                            Ok(s) => error!("stderr: {}", s),
+                            Err(e) => error!("error getting stderror: {}", e),
+                        };
+                        continue;
+                    }
                 }
             }
 

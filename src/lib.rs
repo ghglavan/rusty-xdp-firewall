@@ -4,5 +4,6 @@ use serde::{Deserialize, Serialize};
 pub enum CommandResult {
     Error(String),
     Message(String),
+    RawBytes(Vec<u8>),
     Ok,
 }
