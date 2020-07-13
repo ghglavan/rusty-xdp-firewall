@@ -1,0 +1,10 @@
+load ipbl objs/ip_blacklister.o
+attach lo
+tail ipbl xdp_ip_blacklist lo 0
+parser ip target/debug/ip-parser
+$ip:4 ip 127.0.0.1
+$mask:4 ip 255.255.255.255
+parser int target/debug/int-parser
+$bl:4 int 0
+map write ipbl ips_map $ip $bl
+map write ipbl ips_masks $bl $mask

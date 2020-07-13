@@ -21,6 +21,7 @@ build-daemon = ["libbpf-helpers", "lazy_static"]
 build-client = ["lazy_static"]
 build-ethparser = ["hex"]
 build-intparser = ["byteorder"]
+build-ipparser = []
 
 [[bin]]
 name = "rusty-daemon"
@@ -37,3 +38,7 @@ path = "src/parsers/eth_parser.rs"
 [[bin]]
 name = "int-parser"
 path = "src/parsers/int_parser.rs"
+
+[[bin]]
+name = "ip-parser"
+path = "src/parsers/ip_parser.rs"
